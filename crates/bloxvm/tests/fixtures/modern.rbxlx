@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Item class="Workspace" referent="RBXW0000000000000000000000000000">
+		<Properties>
+			<string name="Name">Workspace</string>
+			<float name="Gravity">196.199997</float>
+			<Vector3 name="GlobalWind"><X>0</X><Y>0</Y><Z>0</Z></Vector3>
+			<Color3 name="GlobalAmbient"><R>0.2</R><G>0.2</G><B>0.2</B></Color3>
+		</Properties>
+		<Item class="Part" referent="RBXP0000000000000000000000000000">
+			<Properties>
+				<string name="Name">BasePlate</string>
+				<CoordinateFrame name="CFrame">
+					<X>0</X><Y>0</Y><Z>0</Z>
+					<R00>1</R00><R01>0</R01><R02>0</R02>
+					<R10>0</R10><R11>1</R11><R12>0</R12>
+					<R20>0</R20><R21>0</R21><R22>1</R22>
+				</CoordinateFrame>
+				<Vector3 name="Size"><X>512</X><Y>20</Y><Z>512</Z></Vector3>
+				<bool name="Anchored">true</bool>
+				<token name="Material">0</token>
+				<Color3 name="Color"><R>0.639216</R><G>0.635294</G><B>0.647059</B></Color3>
+				<Color3uint8 name="BrickColor">4284497952</Color3uint8>
+				<UDim2 name="FaceButtonsSize"><XS>0</XS><XO>50</XO><YS>0</YS><YO>50</YO></UDim2>
+				<Axes name="Axe"><axes>1</axes></Axes>
+				<Faces name="Face"><faces>5</faces></Faces>
+				<PhysicalProperties name="PhysicalProperties">
+					<CustomPhysics>true</CustomPhysics>
+					<Density>0.7</Density>
+					<Friction>0.3</Friction>
+					<Elasticity>0.5</Elasticity>
+					<FrictionWeight>0.3</FrictionWeight>
+					<ElasticityWeight>0.5</ElasticityWeight>
+					<AcousticAbsorption>1</AcousticAbsorption>
+				</PhysicalProperties>
+				<Content name="Texture"><uri>rbxassetid://1234567890</uri></Content>
+				<OptionalCoordinateFrame name="AlignPosition">
+					<CFrame>
+						<X>1</X><Y>2</Y><Z>3</Z>
+						<R00>1</R00><R01>0</R01><R02>0</R02>
+						<R10>0</R10><R11>1</R11><R12>0</R12>
+						<R20>0</R20><R21>0</R21><R22>1</R22>
+					</CFrame>
+				</OptionalCoordinateFrame>
+			</Properties>
+			<Item class="SurfaceAppearance" referent="RBXS0000000000000000000000000000">
+				<Properties>
+					<string name="Name">SurfaceAppearance</string>
+					<Content name="Texture"><uri>rbxassetid://9876543210</uri></Content>
+					<SharedString name="ColorMap">AAAAAAAAAAAAAAAAAAAAAAAA</SharedString>
+					<Vector2 name="TextureSize"><X>128</X><Y>256</Y></Vector2>
+					<Font name="Font">
+						<Family><url>rbxasset://fonts/families/BuilderSans</url></Family>
+						<Weight>700</Weight>
+						<Style>Italic</Style>
+					</Font>
+				</Properties>
+			</Item>
+		</Item>
+		<Item class="Terrain" referent="RBXT0000000000000000000000000000">
+			<Properties>
+				<string name="Name">Terrain</string>
+				<SharedString name="Materials">AAAAAAAAAAAAAAAAAAAAAAAA</SharedString>
+				<Rect2D name="DecalThickness">
+					<min><X>0</X><Y>0</Y></min>
+					<max><X>1</X><Y>1</Y></max>
+				</Rect2D>
+			</Properties>
+		</Item>
+	</Item>
+	<SharedStrings>
+		<SharedString md5="AAAAAAAAAAAAAAAAAAAAAAAA">ZmFrZSB0ZXh0dXJlIGRhdGE=</SharedString>
+	</SharedStrings>
+</roblox>

@@ -1,0 +1,22 @@
+[package]
+name = "bloxvm"
+version = "0.1.0"
+edition = "2021"
+description = "A Roblox emulator written in Rust"
+license = "MIT"
+
+[lib]
+name = "bloxvm"
+
+[dependencies]
+base64 = "0.23.1"
+roxmltree = "0.21.1"
+glow = "0.13"
+glam = "0.27"
+rapier3d = "0.35"
+
+[dev-dependencies]
+winit = "0.29"
+glutin = "0.31"
+glutin-winit = "0.4"
+raw-window-handle = "0.5"

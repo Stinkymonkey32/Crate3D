@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+<External>null</External>
+<Item class="Workspace" referent="RBX0">
+<Properties>
+<string name="Name">Workspace</string>
+</Properties>
+<Item class="Model" referent="RBX1">
+<Properties>
+<string name="Name">Noob</string>
+</Properties>
+<Item class="Part" referent="RBX2">
+<Properties>
+<string name="Name">Torso</string>
+<CoordinateFrame name="CFrame">0 3 0, 1, 0, 0, 0, 1, 0, 0, 0, 1</CoordinateFrame>
+<Vector3 name="Size">2 2 1</Vector3>
+<Color3uint8 name="Color">0 162 255</Color3uint8>
+<bool name="Anchored">false</bool>
+<token name="Shape">1</token>
+<token name="Material">256</token>
+<bool name="CanCollide">true</bool>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX3">
+<Properties>
+<string name="Name">Head</string>
+<CoordinateFrame name="CFrame">0 4.5 0, 1, 0, 0, 0, 1, 0, 0, 0, 1</CoordinateFrame>
+<Vector3 name="Size">1 1 1</Vector3>
+<Color3uint8 name="Color">245 205 48</Color3uint8>
+<bool name="Anchored">false</bool>
+<token name="Shape">1</token>
+<token name="Material">256</token>
+<bool name="CanCollide">true</bool>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX4">
+<Properties>
+<string name="Name">Left Arm</string>
+<CoordinateFrame name="CFrame">-1.5 3 0, 1, 0, 0, 0, 1, 0, 0, 0, 1</CoordinateFrame>
+<Vector3 name="Size">1 2 1</Vector3>
+<Color3uint8 name="Color">245 205 48</Color3uint8>
+<bool name="Anchored">false</bool>
+<token name="Shape">1</token>
+<token name="Material">256</token>
+<bool name="CanCollide">true</bool>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX5">
+<Properties>
+<string name="Name">Right Arm</string>
+<CoordinateFrame name="CFrame">1.5 3 0, 1, 0, 0, 0, 1, 0, 0, 0, 1</CoordinateFrame>
+<Vector3 name="Size">1 2 1</Vector3>
+<Color3uint8 name="Color">245 205 48</Color3uint8>
+<bool name="Anchored">false</bool>
+<token name="Shape">1</token>
+<token name="Material">256</token>
+<bool name="CanCollide">true</bool>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX6">
+<Properties>
+<string name="Name">Left Leg</string>
+<CoordinateFrame name="CFrame">-0.5 1 0, 1, 0, 0, 0, 1, 0, 0, 0, 1</CoordinateFrame>
+<Vector3 name="Size">1 2 1</Vector3>
+<Color3uint8 name="Color">199 210 60</Color3uint8>
+<bool name="Anchored">false</bool>
+<token name="Shape">1</token>
+<token name="Material">256</token>
+<bool name="CanCollide">true</bool>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX7">
+<Properties>
+<string name="Name">Right Leg</string>
+<CoordinateFrame name="CFrame">0.5 1 0, 1, 0, 0, 0, 1, 0, 0, 0, 1</CoordinateFrame>
+<Vector3 name="Size">1 2 1</Vector3>
+<Color3uint8 name="Color">199 210 60</Color3uint8>
+<bool name="Anchored">false</bool>
+<token name="Shape">1</token>
+<token name="Material">256</token>
+<bool name="CanCollide">true</bool>
+</Properties>
+</Item>
+<Item class="Motor6D" referent="RBX8">
+<Properties>
+<string name="Name">Neck</string>
+<CoordinateFrame name="C0">0 1 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<CoordinateFrame name="C1">0 -0.5 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<Object name="Part0">RBX2</Object>
+<Object name="Part1">RBX3</Object>
+<bool name="Anchored">false</bool>
+<bool name="Enabled">true</bool>
+</Properties>
+</Item>
+<Item class="Motor6D" referent="RBX9">
+<Properties>
+<string name="Name">Right Shoulder</string>
+<CoordinateFrame name="C0">1 0.5 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<CoordinateFrame name="C1">-0.5 0.5 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<Object name="Part0">RBX2</Object>
+<Object name="Part1">RBX5</Object>
+<bool name="Anchored">false</bool>
+<bool name="Enabled">true</bool>
+</Properties>
+</Item>
+<Item class="Motor6D" referent="RBX10">
+<Properties>
+<string name="Name">Left Shoulder</string>
+<CoordinateFrame name="C0">-1 0.5 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<CoordinateFrame name="C1">0.5 0.5 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<Object name="Part0">RBX2</Object>
+<Object name="Part1">RBX4</Object>
+<bool name="Anchored">false</bool>
+<bool name="Enabled">true</bool>
+</Properties>
+</Item>
+<Item class="Motor6D" referent="RBX11">
+<Properties>
+<string name="Name">Right Hip</string>
+<CoordinateFrame name="C0">1 -1 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<CoordinateFrame name="C1">-0.5 1 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<Object name="Part0">RBX2</Object>
+<Object name="Part1">RBX7</Object>
+<bool name="Anchored">false</bool>
+<bool name="Enabled">true</bool>
+</Properties>
+</Item>
+<Item class="Motor6D" referent="RBX12">
+<Properties>
+<string name="Name">Left Hip</string>
+<CoordinateFrame name="C0">-1 -1 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<CoordinateFrame name="C1">0.5 1 0, 1, 0, 0, 0, -1, 0, 0, 0, -1</CoordinateFrame>
+<Object name="Part0">RBX2</Object>
+<Object name="Part1">RBX6</Object>
+<bool name="Anchored">false</bool>
+<bool name="Enabled">true</bool>
+</Properties>
+</Item>
+</Item>
+</Item>
+</roblox>
