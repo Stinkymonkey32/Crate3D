@@ -83,4 +83,4 @@ Crate is experimental software. APIs, formats, compatibility, and other parts of
 Crate is an independent project and is not affiliated with, sponsored by, or endorsed by Roblox Corporation.
 
 #
-Required Notice: Copyright Stinkymonkey32 (https://github.com/stinkymonkey32
+Required Notice: Copyright Stinkymonkey32 (https://github.com/stinkymonkey32)
