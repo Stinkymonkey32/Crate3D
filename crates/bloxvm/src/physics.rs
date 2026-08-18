@@ -384,6 +384,9 @@ impl Player {
                 rotation: yaw_rot,
                 size,
                 color,
+                texture_source: None,
+                studs_per_tile: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
             });
         }
 
@@ -396,9 +399,6 @@ impl Player {
             let offset = [s * sa, -ca, -c * sa];
             parts.push(RenderPart {
                 name: name.to_string(),
-                // The joint anchors the limb to the body, so it must be
-                // yaw-rotated with it before adding the (already world-space)
-                // swing offset — otherwise limbs stay glued to the world.
                 position: [
                     feet.x + c * joint[0] - s * joint[2] + offset[0],
                     feet.y + joint[1] + offset[1],
@@ -407,6 +407,9 @@ impl Player {
                 rotation,
                 size,
                 color,
+                texture_source: None,
+                studs_per_tile: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
             });
         }
 
@@ -440,6 +443,9 @@ impl Player {
                 rotation: [r00, r10, r20, r01, r11, r21, r02, r12, r22],
                 size: sp.size,
                 color: sp.color,
+                texture_source: None,
+                studs_per_tile: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
             });
         }
         parts
@@ -500,6 +506,9 @@ mod tests {
                 rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
                 size: [20.0, 1.0, 20.0],
                 color: [1.0, 1.0, 1.0],
+                texture_source: None,
+                studs_per_tile: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
             }],
             bounds: Some(([-10.0, -0.5, -10.0], [10.0, 0.5, 10.0])),
         }

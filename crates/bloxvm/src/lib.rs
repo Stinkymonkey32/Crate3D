@@ -21,6 +21,9 @@ pub mod rbxlx;
 /// DDS texture parsing and DXT decompression.
 pub mod texture;
 
+/// Asset downloading for `rbxassetid://` Content URIs.
+pub mod content;
+
 /// OpenGL renderer: scene building, camera, and draw calls.
 pub mod render;
 

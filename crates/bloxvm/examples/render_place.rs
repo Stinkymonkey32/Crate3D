@@ -29,9 +29,11 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowBuilder;
 
+use bloxvm::content;
 use bloxvm::physics::Player;
-use bloxvm::render::{build_scene, GLRenderer, OrbitCamera};
+use bloxvm::render::{build_scene, prepare_content_textures, prepare_textures, GLRenderer, OrbitCamera};
 use bloxvm::rbxlx::DataModel;
+use bloxvm::texture::TextureManager;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = "tests/fixtures/minimal.rbxlx".to_string();
@@ -102,6 +104,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // address loader; these are valid while the display lives.
     let gl = unsafe { glow::Context::from_loader_function_cstr(|s| gl_config.display().get_proc_address(s)) };
     let renderer = GLRenderer::new(&gl)?;
+    let mut tex_manager = TextureManager::new(&gl);
+    prepare_textures(&gl, &dm, &mut tex_manager);
+    let content_cache = content::resolve_surface_appearance_textures(&dm);
+    prepare_content_textures(&gl, &content_cache, &mut tex_manager);
 
     println!("OpenGL: {}", unsafe { gl.get_parameter_string(glow::VERSION) });
     println!("rendering {} parts (WASD to walk, Space to jump, F to disintegrate, Escape to quit)", scene.parts.len());
@@ -210,7 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let mut parts = scene.parts.clone();
                 parts.extend(player.avatar_parts());
-                renderer.render(&gl, &camera, size.0, size.1, &parts);
+                renderer.render(&gl, &camera, size.0, size.1, &parts, &tex_manager);
                 let _ = surface.swap_buffers(&gl_context);
                 rendered += 1;
                 if let Some(limit) = frames_limit {

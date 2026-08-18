@@ -4,11 +4,23 @@
 //! around it, and draws every `BasePart` as a flat-shaded colored box. The
 //! window/input handling lives in the examples; this module only touches GL.
 
+use std::collections::BTreeMap;
+
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
 
-use crate::instance::DataModel;
+use crate::instance::{DataModel, Instance};
+use crate::texture::{self, TextureManager};
 use crate::value::Value;
+
+/// Where a part's texture comes from.
+#[derive(Debug, Clone)]
+pub enum TextureSource {
+    /// Embedded in the place file as a SharedString, keyed by MD5.
+    SharedString([u8; 16]),
+    /// Referenced by a Content URI, to be downloaded.
+    Content(String),
+}
 
 /// One box to draw.
 #[derive(Debug, Clone)]
@@ -22,6 +34,14 @@ pub struct RenderPart {
     pub size: [f32; 3],
     /// Linear sRGB-ish base color.
     pub color: [f32; 3],
+    /// Texture source: embedded SharedString or external Content URI.
+    /// `None` = use flat color only.
+    pub texture_source: Option<TextureSource>,
+    /// How many studs per texture tile (U, V).
+    /// Inherited from `Texture.StudsPerTileU/V` or `Decal` defaults.
+    pub studs_per_tile: [f32; 2],
+    /// UV offset from `Texture.UVOffset` / `Decal` properties.
+    pub uv_offset: [f32; 2],
 }
 
 /// The immutable data the renderer draws.
@@ -76,17 +96,190 @@ pub fn build_scene(dm: &DataModel) -> Scene {
             _ => DEFAULT_COLOR,
         };
 
+        let surface = find_surface_info(dm, inst, &size);
+        let texture_source = surface.as_ref().map(|s| s.texture_source.clone());
+        let studs_per_tile = surface.as_ref().map(|s| s.studs_per_tile).unwrap_or([1.0, 1.0]);
+        let uv_offset = surface.as_ref().map(|s| s.uv_offset).unwrap_or([0.0, 0.0]);
+
         parts.push(RenderPart {
             name: inst.name.clone(),
             position,
             rotation,
             size,
             color,
+            texture_source,
+            studs_per_tile,
+            uv_offset,
         });
     }
 
     let bounds = compute_bounds(&parts);
     Scene { parts, bounds }
+}
+
+/// Result of scanning a part's children for texture info.
+struct SurfaceInfo {
+    texture_source: TextureSource,
+    studs_per_tile: [f32; 2],
+    uv_offset: [f32; 2],
+}
+
+/// Looks up the texture source and UV tiling for a `BasePart` instance by
+/// scanning its children (`SurfaceAppearance`, `Texture`, `Decal`) and its
+/// own `Texture` property. `part_size` is the part's Size in studs, used to
+/// default studs_per_tile for Decals/SurfaceAppearance so the texture fills
+/// the face exactly once.
+fn find_surface_info(dm: &DataModel, inst: &Instance, part_size: &[f32; 3]) -> Option<SurfaceInfo> {
+    for &child_id in &inst.children {
+        let child = &dm.instances[child_id];
+        match child.class.as_str() {
+            "SurfaceAppearance" => {
+                if let Some(Value::SharedString { key, .. }) = child.get_property("ColorMap") {
+                    if let Some(md5) = texture::parse_md5_hex(&key) {
+                        return Some(SurfaceInfo {
+                            texture_source: TextureSource::SharedString(md5),
+                            studs_per_tile: [part_size[0], part_size[2]],
+                            uv_offset: [0.0, 0.0],
+                        });
+                    }
+                }
+                if let Some(Value::Content(uri)) = child.get_property("ColorMap") {
+                    if !uri.is_empty() {
+                        return Some(SurfaceInfo {
+                            texture_source: TextureSource::Content(uri.clone()),
+                            studs_per_tile: [part_size[0], part_size[2]],
+                            uv_offset: [0.0, 0.0],
+                        });
+                    }
+                }
+            }
+            "Texture" => {
+                if let Some(Value::Content(uri)) = child.get_property("Texture") {
+                    if !uri.is_empty() {
+                        let spt_u = child.get_property("StudsPerTileU")
+                            .and_then(|v| match v { Value::Float(f) => Some(*f), Value::Double(f) => Some(*f as f32), _ => None })
+                            .unwrap_or(1.0).max(0.01);
+                        let spt_v = child.get_property("StudsPerTileV")
+                            .and_then(|v| match v { Value::Float(f) => Some(*f), Value::Double(f) => Some(*f as f32), _ => None })
+                            .unwrap_or(1.0).max(0.01);
+                        let uv_off = read_vec2(child, "UVOffset").unwrap_or([0.0, 0.0]);
+                        return Some(SurfaceInfo {
+                            texture_source: TextureSource::Content(uri.clone()),
+                            studs_per_tile: [spt_u, spt_v],
+                            uv_offset: uv_off,
+                        });
+                    }
+                }
+            }
+            "Decal" => {
+                if let Some(Value::Content(uri)) = child.get_property("Texture") {
+                    if !uri.is_empty() {
+                        let uv_off = read_vec2(child, "UVOffset").unwrap_or([0.0, 0.0]);
+                        return Some(SurfaceInfo {
+                            texture_source: TextureSource::Content(uri.clone()),
+                            studs_per_tile: [part_size[0], part_size[2]],
+                            uv_offset: uv_off,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Fall back to the part's own Texture property (legacy Content URI).
+    if let Some(Value::Content(uri)) = inst.get_property("Texture") {
+        if !uri.is_empty() {
+            return Some(SurfaceInfo {
+                texture_source: TextureSource::Content(uri.clone()),
+                studs_per_tile: [part_size[0], part_size[2]],
+                uv_offset: [0.0, 0.0],
+            });
+        }
+    }
+
+    None
+}
+
+/// Reads a `Vector2` property from an instance, returning `[x, y]`.
+fn read_vec2(inst: &Instance, name: &str) -> Option<[f32; 2]> {
+    match inst.get_property(name)? {
+        Value::Vector2 { x, y } => Some([*x, *y]),
+        _ => None,
+    }
+}
+
+/// Pre-uploads every DDS blob found in the place file's `<SharedStrings>`
+/// block to the GPU. Non-DDS blobs are silently skipped.
+pub fn prepare_textures(gl: &glow::Context, dm: &DataModel, tex_manager: &mut TextureManager) {
+    for (key_str, bytes) in &dm.shared_strings {
+        if let Some(key) = texture::parse_md5_hex(key_str) {
+            if let Some(tex) = texture::parse_dds(bytes) {
+                tex_manager.upload(gl, &key, &tex);
+            }
+        }
+    }
+}
+
+/// Uploads downloaded Content texture bytes to the GPU. The `content_cache`
+/// maps Content URI strings to their downloaded bytes. DDS blobs are parsed
+/// and uploaded to the texture manager keyed by the URI (so parts referencing
+/// the same URI share one GPU texture).
+pub fn prepare_content_textures(
+    gl: &glow::Context,
+    content_cache: &BTreeMap<String, Vec<u8>>,
+    tex_manager: &mut TextureManager,
+) {
+    for (uri, bytes) in content_cache {
+        let magic = if bytes.len() >= 4 {
+            format!("{:02x} {:02x} {:02x} {:02x}", bytes[0], bytes[1], bytes[2], bytes[3])
+        } else {
+            format!("{} bytes", bytes.len())
+        };
+        let tex = texture::parse_dds(bytes)
+            .or_else(|| texture::parse_png(bytes))
+            .or_else(|| {
+                image::load_from_memory(bytes).ok().map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    texture::Texture {
+                        width: w,
+                        height: h,
+                        depth: 1,
+                        mip_levels: 1,
+                        format: texture::TextureFormat::Rgba8,
+                        data: rgba.into_raw(),
+                    }
+                })
+            });
+        match tex {
+            Some(tex) => {
+                println!("  [content] {uri}: {}x{} {:?} (magic: {})", tex.width, tex.height, tex.format, magic);
+                let key = md5_string_key(uri);
+                tex_manager.upload(gl, &key, &tex);
+            }
+            None => {
+                println!("  [content] {uri}: FAILED to parse (magic: {}, {} bytes)", magic, bytes.len());
+            }
+        }
+    }
+}
+
+/// Maps a string key (Content URI or any identifier) to a `[u8; 16]` by
+/// hashing the bytes with a simple FNV-1a. This is NOT cryptographically
+/// secure — it's just for deduplication in the texture cache.
+fn md5_string_key(s: &str) -> [u8; 16] {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    let h = hasher.finish();
+    // Fill the 16-byte key with the 8-byte hash (padded with zeros).
+    let mut key = [0u8; 16];
+    key[..8].copy_from_slice(&h.to_le_bytes());
+    // Mix the upper bytes to reduce collision risk.
+    key[8..16].copy_from_slice(&(h.reverse_bits()).to_le_bytes());
+    key
 }
 
 /// Axis-aligned bounds covering every part corner.
@@ -214,30 +407,67 @@ pub struct GLRenderer {
     u_mvp: Option<glow::UniformLocation>,
     u_normal_mat: Option<glow::UniformLocation>,
     u_color: Option<glow::UniformLocation>,
+    u_has_texture: Option<glow::UniformLocation>,
+    u_size: Option<glow::UniformLocation>,
+    u_studs_per_tile: Option<glow::UniformLocation>,
+    u_uv_offset: Option<glow::UniformLocation>,
 }
 
 const VERTEX_SRC: &str = r#"#version 330 core
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
 uniform mat4 u_mvp;
 uniform mat3 u_normal_mat;
 out vec3 v_normal;
+out vec3 v_obj_pos;
+out vec2 v_uv;
 void main() {
     v_normal = u_normal_mat * a_normal;
+    v_obj_pos = a_pos;
+    v_uv = a_uv;
     gl_Position = u_mvp * vec4(a_pos, 1.0);
 }
 "#;
 
 const FRAGMENT_SRC: &str = r#"#version 330 core
 in vec3 v_normal;
+in vec3 v_obj_pos;
+in vec2 v_uv;
 uniform vec4 u_color;
 uniform vec3 u_light_dir;
+uniform vec3 u_size;
+uniform vec2 u_studs_per_tile;
+uniform vec2 u_uv_offset;
+uniform sampler2D u_texture;
+uniform bool u_has_texture;
 out vec4 frag_color;
 void main() {
     vec3 n = normalize(v_normal);
     float diff = max(dot(n, normalize(u_light_dir)), 0.0);
     float intensity = 0.15 + diff * 0.85;
-    frag_color = vec4(u_color.rgb * intensity, u_color.a);
+
+    vec2 uv;
+    if (u_has_texture) {
+        // Box-projected UVs: pick face axes from the dominant normal component.
+        vec3 p = v_obj_pos + 0.5;
+        vec3 abs_n = abs(n);
+        if (abs_n.y >= abs_n.x && abs_n.y >= abs_n.z) {
+            uv = p.xz * u_size.xz / u_studs_per_tile;
+        } else if (abs_n.x >= abs_n.z) {
+            uv = p.zy * u_size.zy / u_studs_per_tile;
+        } else {
+            uv = p.xy * u_size.xy / u_studs_per_tile;
+        }
+        uv += u_uv_offset;
+    } else {
+        uv = v_uv;
+    }
+
+    vec3 base_color = u_has_texture
+        ? texture(u_texture, uv).rgb
+        : u_color.rgb;
+    frag_color = vec4(base_color * intensity, u_color.a);
 }
 "#;
 
@@ -260,18 +490,27 @@ impl GLRenderer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
             gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, as_bytes(&indices), glow::STATIC_DRAW);
 
-            // a_pos: 3 floats at offset 0, a_normal: 3 floats at offset 12.
-            let stride = 24;
+            // a_pos: 3 floats at offset 0
+            // a_normal: 3 floats at offset 12
+            // a_uv: 2 floats at offset 24
+            let stride = 32;
             gl.enable_vertex_attrib_array(0);
             gl.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, stride, 0);
             gl.enable_vertex_attrib_array(1);
             gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, stride, 12);
+            gl.enable_vertex_attrib_array(2);
+            gl.vertex_attrib_pointer_f32(2, 2, glow::FLOAT, false, stride, 24);
         }
 
         unsafe {
             gl.use_program(Some(program));
             let light = Vec3::new(0.4, 0.8, 0.6).normalize();
             gl.uniform_3_f32(gl.get_uniform_location(program, "u_light_dir").as_ref(), light.x, light.y, light.z);
+            // Set the texture sampler to read from texture unit 0.
+            gl.uniform_1_i32(
+                gl.get_uniform_location(program, "u_texture").as_ref(),
+                0,
+            );
             gl.enable(glow::DEPTH_TEST);
         }
 
@@ -282,11 +521,15 @@ impl GLRenderer {
             u_mvp: unsafe { gl.get_uniform_location(program, "u_mvp") },
             u_normal_mat: unsafe { gl.get_uniform_location(program, "u_normal_mat") },
             u_color: unsafe { gl.get_uniform_location(program, "u_color") },
+            u_has_texture: unsafe { gl.get_uniform_location(program, "u_has_texture") },
+            u_size: unsafe { gl.get_uniform_location(program, "u_size") },
+            u_studs_per_tile: unsafe { gl.get_uniform_location(program, "u_studs_per_tile") },
+            u_uv_offset: unsafe { gl.get_uniform_location(program, "u_uv_offset") },
         })
     }
 
     /// Clears to the sky color and draws every part.
-    pub fn render(&self, gl: &glow::Context, camera: &OrbitCamera, width: u32, height: u32, parts: &[RenderPart]) {
+    pub fn render(&self, gl: &glow::Context, camera: &OrbitCamera, width: u32, height: u32, parts: &[RenderPart], tex_manager: &TextureManager) {
         let (sky_r, sky_g, sky_b) = (sky_color()[0], sky_color()[1], sky_color()[2]);
         let aspect = width as f32 / height.max(1) as f32;
         let proj = camera.projection(aspect, 1.05); // ~60 deg vertical FOV
@@ -299,14 +542,15 @@ impl GLRenderer {
 
             gl.use_program(Some(self.program));
             gl.bind_vertex_array(Some(self.vao));
+            gl.active_texture(glow::TEXTURE0);
         }
 
         for part in parts {
-            self.draw_part(gl, &view, &proj, part);
+            self.draw_part(gl, &view, &proj, part, tex_manager);
         }
     }
 
-    fn draw_part(&self, gl: &glow::Context, view: &Mat4, proj: &Mat4, part: &RenderPart) {
+    fn draw_part(&self, gl: &glow::Context, view: &Mat4, proj: &Mat4, part: &RenderPart, tex_manager: &TextureManager) {
         let rot = Mat3::from_cols_array_2d(&[
             [part.rotation[0], part.rotation[1], part.rotation[2]],
             [part.rotation[3], part.rotation[4], part.rotation[5]],
@@ -315,6 +559,15 @@ impl GLRenderer {
         let model = Mat4::from_scale_rotation_translation(Vec3::from(part.size), glam::Quat::from_mat3(&rot), Vec3::from(part.position));
         let mvp = *proj * *view * model;
         let normal_mat = Mat3::from_mat4(model.inverse().transpose());
+
+        let (has_tex, tex_handle) = match &part.texture_source {
+            Some(TextureSource::SharedString(md5)) => (true, tex_manager.handle(md5)),
+            Some(TextureSource::Content(uri)) => {
+                let key = md5_string_key(uri);
+                (true, tex_manager.handle(&key))
+            }
+            None => (false, tex_manager.fallback()),
+        };
 
         unsafe {
             gl.uniform_matrix_4_f32_slice(self.u_mvp.as_ref(), false, &mvp.to_cols_array());
@@ -326,6 +579,11 @@ impl GLRenderer {
                 part.color[2],
                 1.0,
             );
+            gl.uniform_3_f32(self.u_size.as_ref(), part.size[0], part.size[1], part.size[2]);
+            gl.uniform_2_f32(self.u_studs_per_tile.as_ref(), part.studs_per_tile[0], part.studs_per_tile[1]);
+            gl.uniform_2_f32(self.u_uv_offset.as_ref(), part.uv_offset[0], part.uv_offset[1]);
+            gl.bind_texture(glow::TEXTURE_2D, Some(tex_handle));
+            gl.uniform_1_i32(self.u_has_texture.as_ref(), has_tex as i32);
             gl.draw_elements(glow::TRIANGLES, self.index_count, glow::UNSIGNED_INT, 0);
         }
     }
@@ -367,24 +625,44 @@ fn link_program(gl: &glow::Context, vs_src: &str, fs_src: &str) -> Result<glow::
     }
 }
 
-/// Builds a unit cube ([-0.5, 0.5]^3) as interleaved pos/normal vertices.
+/// Builds a unit cube ([-0.5, 0.5]^3) as interleaved pos/normal/uv vertices.
 fn unit_cube() -> (Vec<f32>, Vec<u32>) {
-    let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        ([1.0, 0.0, 0.0], [[0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5]]),
-        ([-1.0, 0.0, 0.0], [[-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5], [-0.5, -0.5, -0.5]]),
-        ([0.0, 1.0, 0.0], [[-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5]]),
-        ([0.0, -1.0, 0.0], [[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5]]),
-        ([0.0, 0.0, 1.0], [[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]]),
-        ([0.0, 0.0, -1.0], [[-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0.5, -0.5, -0.5]]),
+    // Each face: normal, 4 corners (pos), and their UV coordinates.
+    let faces: [([f32; 3], [[f32; 3]; 4], [[f32; 2]; 4]); 6] = [
+        // +X
+        ([1.0, 0.0, 0.0],
+         [[0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5]],
+         [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]),
+        // -X
+        ([-1.0, 0.0, 0.0],
+         [[-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5], [-0.5, -0.5, -0.5]],
+         [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]),
+        // +Y
+        ([0.0, 1.0, 0.0],
+         [[-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5]],
+         [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]]),
+        // -Y
+        ([0.0, -1.0, 0.0],
+         [[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5]],
+         [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]]),
+        // +Z
+        ([0.0, 0.0, 1.0],
+         [[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]],
+         [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+        // -Z
+        ([0.0, 0.0, -1.0],
+         [[-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5]],
+         [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]]),
     ];
 
-    let mut verts = Vec::with_capacity(6 * 4 * 6);
+    let mut verts = Vec::with_capacity(6 * 4 * 8);
     let mut indices = Vec::with_capacity(6 * 6);
-    for (normal, corners) in faces {
-        let base = (verts.len() / 6) as u32;
-        for corner in corners {
-            verts.extend_from_slice(&corner);
+    for (normal, corners, uvs) in faces {
+        let base = (verts.len() / 8) as u32;
+        for (corner, uv) in corners.iter().zip(uvs.iter()) {
+            verts.extend_from_slice(corner);
             verts.extend_from_slice(&normal);
+            verts.extend_from_slice(uv);
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }

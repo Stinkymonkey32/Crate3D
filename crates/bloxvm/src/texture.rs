@@ -9,6 +9,19 @@
 //! formats (DXT1/3/5, BC4, BC5) to straight RGBA8 so they can be handed to a
 //! renderer. Unsupported formats are reported but never cause loading to fail.
 
+use std::collections::HashMap;
+
+use flate2::read::ZlibDecoder;
+use glow::HasContext;
+use std::io::Read;
+
+/// OpenGL constant for `GL_COMPRESSED_RGBA_S3TC_DXT1_EXT`.
+const COMPRESSED_RGBA_S3TC_DXT1_EXT: u32 = 0x83F1;
+/// OpenGL constant for `GL_COMPRESSED_RGBA_S3TC_DXT3_EXT`.
+const COMPRESSED_RGBA_S3TC_DXT3_EXT: u32 = 0x83F2;
+/// OpenGL constant for `GL_COMPRESSED_RGBA_S3TC_DXT5_EXT`.
+const COMPRESSED_RGBA_S3TC_DXT5_EXT: u32 = 0x83F3;
+
 /// The compressed pixel format of a DDS surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
@@ -137,6 +150,195 @@ pub fn parse_dds(bytes: &[u8]) -> Option<Texture> {
     })
 }
 
+/// Parses a PNG file and decompresses it to an RGBA8 [`Texture`].
+/// Returns `None` for non-PNG input or unsupported formats.
+pub fn parse_png(bytes: &[u8]) -> Option<Texture> {
+    if bytes.len() < 8 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+
+    let mut offset = 8;
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let mut bit_depth = 0u8;
+    let mut color_type = 0u8;
+    let mut idat_data = Vec::new();
+
+    while offset + 8 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[offset..offset + 4].try_into().ok()?) as usize;
+        let chunk_type = &bytes[offset + 4..offset + 8];
+
+        if offset + 12 + len > bytes.len() {
+            break;
+        }
+
+        let chunk_data = &bytes[offset + 8..offset + 8 + len];
+
+        match chunk_type {
+            b"IHDR" => {
+                if chunk_data.len() < 13 {
+                    return None;
+                }
+                width = u32::from_be_bytes(chunk_data[0..4].try_into().ok()?);
+                height = u32::from_be_bytes(chunk_data[4..8].try_into().ok()?);
+                bit_depth = chunk_data[8];
+                color_type = chunk_data[9];
+            }
+            b"IDAT" => {
+                idat_data.extend_from_slice(chunk_data);
+            }
+            b"IEND" => break,
+            _ => {}
+        }
+
+        offset += 12 + len;
+    }
+
+    if width == 0 || height == 0 || idat_data.is_empty() {
+        return None;
+    }
+
+    // Decompress the concatenated IDAT data (zlib stream).
+    let mut decoder = ZlibDecoder::new(&idat_data[..]);
+    let mut raw = Vec::new();
+    decoder.read_to_end(&mut raw).ok()?;
+
+    let bpp: usize = match color_type {
+        0 => 1, // Grayscale
+        2 => 3, // RGB
+        3 => 1, // Indexed (palette)
+        4 => 2, // Grayscale + Alpha
+        6 => 4, // RGBA
+        _ => return None,
+    };
+
+    if bit_depth != 8 {
+        return None; // Only 8-bit per channel supported.
+    }
+
+    let stride = width as usize * bpp;
+    let mut rgba = vec![0u8; width as usize * height as usize * 4];
+
+    for y in 0..height as usize {
+        let row_start = y * (stride + 1);
+        if row_start >= raw.len() {
+            return None;
+        }
+        let filter = raw[row_start];
+        let src_row_start = row_start + 1;
+        let src_row_end = src_row_start + stride;
+        if src_row_end > raw.len() {
+            return None;
+        }
+        let src_row = &raw[src_row_start..src_row_end];
+        let row_off = y * width as usize * 4;
+        let prev_off = if y > 0 { (y - 1) * width as usize * 4 } else { 0 };
+
+        for x in 0..width as usize {
+            let si = x * bpp;
+            let di = x * 4;
+
+            let (r, g, b, a) = match color_type {
+                6 => (src_row[si], src_row[si + 1], src_row[si + 2], src_row[si + 3]),
+                2 => (src_row[si], src_row[si + 1], src_row[si + 2], 255),
+                0 => {
+                    let v = src_row[si];
+                    (v, v, v, 255)
+                }
+                4 => {
+                    let v = src_row[si];
+                    (v, v, v, src_row[si + 1])
+                }
+                _ => (0, 0, 0, 255),
+            };
+
+            match filter {
+                0 => {
+                    rgba[row_off + di] = r;
+                    rgba[row_off + di + 1] = g;
+                    rgba[row_off + di + 2] = b;
+                    rgba[row_off + di + 3] = a;
+                }
+                1 => { // Sub
+                    let pr = if x > 0 { rgba[row_off + di - 4] } else { 0 };
+                    let pg = if x > 0 { rgba[row_off + di - 3] } else { 0 };
+                    let pb = if x > 0 { rgba[row_off + di - 2] } else { 0 };
+                    let pa = if x > 0 { rgba[row_off + di - 1] } else { 0 };
+                    rgba[row_off + di] = r.wrapping_add(pr);
+                    rgba[row_off + di + 1] = g.wrapping_add(pg);
+                    rgba[row_off + di + 2] = b.wrapping_add(pb);
+                    rgba[row_off + di + 3] = a.wrapping_add(pa);
+                }
+                2 => { // Up
+                    let pr = if y > 0 { rgba[prev_off + di] } else { 0 };
+                    let pg = if y > 0 { rgba[prev_off + di + 1] } else { 0 };
+                    let pb = if y > 0 { rgba[prev_off + di + 2] } else { 0 };
+                    let pa = if y > 0 { rgba[prev_off + di + 3] } else { 0 };
+                    rgba[row_off + di] = r.wrapping_add(pr);
+                    rgba[row_off + di + 1] = g.wrapping_add(pg);
+                    rgba[row_off + di + 2] = b.wrapping_add(pb);
+                    rgba[row_off + di + 3] = a.wrapping_add(pa);
+                }
+                3 => { // Average
+                    let pr = if x > 0 { rgba[row_off + di - 4] } else { 0 };
+                    let pg = if x > 0 { rgba[row_off + di - 3] } else { 0 };
+                    let pb = if x > 0 { rgba[row_off + di - 2] } else { 0 };
+                    let pa = if x > 0 { rgba[row_off + di - 1] } else { 0 };
+                    let ar = if y > 0 { rgba[prev_off + di] } else { 0 };
+                    let ag = if y > 0 { rgba[prev_off + di + 1] } else { 0 };
+                    let ab = if y > 0 { rgba[prev_off + di + 2] } else { 0 };
+                    let aa = if y > 0 { rgba[prev_off + di + 3] } else { 0 };
+                    rgba[row_off + di] = r.wrapping_add(((pr as u16 + ar as u16) / 2) as u8);
+                    rgba[row_off + di + 1] = g.wrapping_add(((pg as u16 + ag as u16) / 2) as u8);
+                    rgba[row_off + di + 2] = b.wrapping_add(((pb as u16 + ab as u16) / 2) as u8);
+                    rgba[row_off + di + 3] = a.wrapping_add(((pa as u16 + aa as u16) / 2) as u8);
+                }
+                4 => { // Paeth
+                    let paeth = |pr: u8, ar: u8, br: u8| -> u8 {
+                        let p = pr as i16 + ar as i16 - br as i16;
+                        let (pr_i, ar_i, br_i) = (pr as i16, ar as i16, br as i16);
+                        let (pa, pc, pbb) = ((p - pr_i).abs(), (p - ar_i).abs(), (p - br_i).abs());
+                        if pa <= pc && pa <= pbb { pr }
+                        else if pc <= pbb { ar }
+                        else { br }
+                    };
+                    let pr_r = if x > 0 { rgba[row_off + di - 4] } else { 0 };
+                    let pr_g = if x > 0 { rgba[row_off + di - 3] } else { 0 };
+                    let pr_b = if x > 0 { rgba[row_off + di - 2] } else { 0 };
+                    let pr_a = if x > 0 { rgba[row_off + di - 1] } else { 0 };
+                    let ar = if y > 0 { rgba[prev_off + di] } else { 0 };
+                    let ag = if y > 0 { rgba[prev_off + di + 1] } else { 0 };
+                    let ab = if y > 0 { rgba[prev_off + di + 2] } else { 0 };
+                    let aa = if y > 0 { rgba[prev_off + di + 3] } else { 0 };
+                    let br = if x > 0 && y > 0 { rgba[prev_off + di - 4] } else { 0 };
+                    let bg = if x > 0 && y > 0 { rgba[prev_off + di - 3] } else { 0 };
+                    let bb = if x > 0 && y > 0 { rgba[prev_off + di - 2] } else { 0 };
+                    let ba = if x > 0 && y > 0 { rgba[prev_off + di - 1] } else { 0 };
+                    rgba[row_off + di] = r.wrapping_add(paeth(pr_r, ar, br));
+                    rgba[row_off + di + 1] = g.wrapping_add(paeth(pr_g, ag, bg));
+                    rgba[row_off + di + 2] = b.wrapping_add(paeth(pr_b, ab, bb));
+                    rgba[row_off + di + 3] = a.wrapping_add(paeth(pr_a, aa, ba));
+                }
+                _ => {
+                    rgba[row_off + di] = r;
+                    rgba[row_off + di + 1] = g;
+                    rgba[row_off + di + 2] = b;
+                    rgba[row_off + di + 3] = a;
+                }
+            }
+        }
+    }
+
+    Some(Texture {
+        width,
+        height,
+        depth: 1,
+        mip_levels: 1,
+        format: TextureFormat::Rgba8,
+        data: rgba,
+    })
+}
+
 /// Maps a DXGI format id (from the DX10 header) to a [`TextureFormat`].
 fn dxgi_format(dxgi: u32) -> TextureFormat {
     match dxgi {
@@ -153,6 +355,25 @@ fn dxgi_format(dxgi: u32) -> TextureFormat {
     }
 }
 
+impl TextureFormat {
+    /// The OpenGL internal format constant for uploading this format to the
+    /// GPU, or `None` if this format cannot be uploaded directly.
+    pub fn gl_internal_format(&self) -> Option<u32> {
+        match self {
+            TextureFormat::Dxt1 => Some(COMPRESSED_RGBA_S3TC_DXT1_EXT),
+            TextureFormat::Dxt3 => Some(COMPRESSED_RGBA_S3TC_DXT3_EXT),
+            TextureFormat::Dxt5 => Some(COMPRESSED_RGBA_S3TC_DXT5_EXT),
+            // BC4/BC5 need ARB_texture_compression / EXT_texture_compression_rgtc
+            // which is rarer than S3TC. Fall back to RGBA8 for those.
+            TextureFormat::Rgba8 => Some(glow::RGBA8 as u32),
+            TextureFormat::Bgra8 => Some(glow::RGBA8 as u32),
+            TextureFormat::Rgb8 => Some(glow::RGB8 as u32),
+            TextureFormat::R8 => Some(glow::R8 as u32),
+            _ => None,
+        }
+    }
+}
+
 impl Texture {
     /// `true` if the surface uses a 4x4 block-compressed format.
     pub fn is_compressed(&self) -> bool {
@@ -162,7 +383,48 @@ impl Texture {
         )
     }
 
-    /// Bytes per 4x4 block for block-compressed formats.
+    /// Bytes per 4x4 block for block-compressed formats, or `None` for
+    /// uncompressed formats.
+    pub fn compressed_block_size(&self) -> Option<usize> {
+        match self.format {
+            TextureFormat::Dxt1 => Some(8),
+            TextureFormat::Dxt3 | TextureFormat::Dxt5
+            | TextureFormat::Bc4 | TextureFormat::Bc5
+            | TextureFormat::Bc6h | TextureFormat::Bc7 => Some(16),
+            _ => None,
+        }
+    }
+
+    /// Returns the raw byte slice for a single mip level, or `None` if the
+    /// data is too short.
+    pub fn mip_data(&self, level: u32) -> Option<&[u8]> {
+        let mut offset = 0usize;
+        for l in 0..self.mip_levels {
+            let (w, h) = self.mip_dimensions(l);
+            let blocks = if self.is_compressed() {
+                ((w as usize + 3) / 4) * ((h as usize + 3) / 4) * self.block_size()
+            } else {
+                w as usize * h as usize * self.pixel_bytes()
+            };
+            if l == level {
+                return self.data.get(offset..offset + blocks);
+            }
+            offset += blocks;
+        }
+        None
+    }
+
+    /// Bytes per pixel for uncompressed formats.
+    fn pixel_bytes(&self) -> usize {
+        match self.format {
+            TextureFormat::Rgba8 | TextureFormat::Bgra8 => 4,
+            TextureFormat::Rgb8 => 3,
+            TextureFormat::R8 => 1,
+            _ => 0,
+        }
+    }
+
+    /// Bytes per 4x4 block for block-compressed formats (internal use).
     fn block_size(&self) -> usize {
         match self.format {
             TextureFormat::Dxt1 => 8,
@@ -376,6 +638,188 @@ fn decode_dxt5_alpha(block: &[u8], out: &mut [u8]) {
     }
 }
 
+/// Parses a 32-character hex string (MD5 key) into `[u8; 16]`.
+pub fn parse_md5_hex(s: &str) -> Option<[u8; 16]> {
+    let s = s.trim();
+    if s.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Manages GPU textures: upload, cache by MD5 key, and a magenta fallback.
+pub struct TextureManager {
+    cache: HashMap<[u8; 16], glow::Texture>,
+    fallback: glow::Texture,
+    has_s3tc: bool,
+}
+
+impl TextureManager {
+    /// Creates a new texture manager. Currently always uses the RGBA8 software
+    /// decompression path. Compressed GPU upload (S3TC) can be enabled later
+    /// once `glGetStringi` is available via glow.
+    pub fn new(gl: &glow::Context) -> Self {
+        let has_s3tc = false;
+
+        let fallback = Self::create_magenta_fallback(gl);
+
+        TextureManager {
+            cache: HashMap::new(),
+            fallback,
+            has_s3tc,
+        }
+    }
+
+    /// Uploads a parsed [`Texture`] to the GPU, keyed by its MD5.
+    /// Compressed formats are uploaded directly if S3TC is available;
+    /// otherwise the texture is decompressed to RGBA8 first.
+    pub fn upload(&mut self, gl: &glow::Context, key: &[u8; 16], tex: &Texture) {
+        if self.cache.contains_key(key) {
+            return;
+        }
+
+        let gl_tex = unsafe { gl.create_texture() }.expect("create texture");
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+        }
+
+        let uploaded = if self.has_s3tc && tex.is_compressed() && tex.format.gl_internal_format().is_some() {
+            Self::upload_compressed(gl, tex)
+        } else {
+            Self::upload_rgba8(gl, tex)
+        };
+
+        if uploaded {
+            self.cache.insert(*key, gl_tex);
+        } else {
+            unsafe { gl.delete_texture(gl_tex) };
+        }
+    }
+
+    /// Returns the GL texture handle for the given key, or the magenta
+    /// fallback if the key is not in the cache.
+    pub fn handle(&self, key: &[u8; 16]) -> glow::Texture {
+        self.cache.get(key).copied().unwrap_or(self.fallback)
+    }
+
+    /// The magenta checkerboard fallback texture.
+    pub fn fallback(&self) -> glow::Texture {
+        self.fallback
+    }
+
+    /// Frees all GPU textures owned by this manager.
+    pub fn delete(&mut self, gl: &glow::Context) {
+        for tex in self.cache.values() {
+            unsafe { gl.delete_texture(*tex) };
+        }
+        self.cache.clear();
+        unsafe { gl.delete_texture(self.fallback) };
+    }
+
+    fn upload_compressed(gl: &glow::Context, tex: &Texture) -> bool {
+        let gl_fmt = match tex.format.gl_internal_format() {
+            Some(f) => f,
+            None => return false,
+        };
+        if tex.compressed_block_size().is_none() {
+            return false;
+        }
+
+        for level in 0..tex.mip_levels {
+            let (w, h) = tex.mip_dimensions(level);
+            if let Some(data) = tex.mip_data(level) {
+                unsafe {
+                    gl.compressed_tex_image_2d(
+                        glow::TEXTURE_2D,
+                        level as i32,
+                        gl_fmt as i32,
+                        w as i32,
+                        h as i32,
+                        0,
+                        data.len() as i32,
+                        data,
+                    );
+                }
+            }
+        }
+
+        unsafe {
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
+        }
+        true
+    }
+
+    fn upload_rgba8(gl: &glow::Context, tex: &Texture) -> bool {
+        let rgba = match tex.to_rgba8() {
+            Some(data) => data,
+            None => return false,
+        };
+
+        let (w, h) = tex.mip_dimensions(0);
+        unsafe {
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                w as i32,
+                h as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                Some(&rgba),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
+            gl.generate_mipmap(glow::TEXTURE_2D);
+        }
+        true
+    }
+
+    /// Creates a 4x4 magenta/green checkerboard texture for missing assets.
+    fn create_magenta_fallback(gl: &glow::Context) -> glow::Texture {
+        let tex = unsafe { gl.create_texture() }.expect("create fallback texture");
+        // Classic magenta checkered: bright magenta and dark green.
+        let pixels: [u8; 64] = [
+            // Row 0
+            255, 0, 255, 255,   0, 0, 0, 255,   255, 0, 255, 255,   0, 0, 0, 255,
+            // Row 1
+            0, 0, 0, 255,   255, 0, 255, 255,   0, 0, 0, 255,   255, 0, 255, 255,
+            // Row 2
+            255, 0, 255, 255,   0, 0, 0, 255,   255, 0, 255, 255,   0, 0, 0, 255,
+            // Row 3
+            0, 0, 0, 255,   255, 0, 255, 255,   0, 0, 0, 255,   255, 0, 255, 255,
+        ];
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                4,
+                4,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                Some(&pixels),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
+        }
+        tex
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +895,36 @@ mod tests {
         assert_eq!(rgba.len(), 4 * 4 * 4);
         assert_eq!(&rgba[0..4], &[255, 255, 255, 255]);
         assert_eq!(&rgba[3 * 4..4 * 4], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn parses_md5_hex() {
+        let key = "d41d8cd98f00b204e9800998ecf8427e";
+        let result = parse_md5_hex(key).expect("parse md5");
+        assert_eq!(result[0], 0xd4);
+        assert_eq!(result[1], 0x1d);
+        assert_eq!(result[15], 0x7e);
+    }
+
+    #[test]
+    fn rejects_invalid_md5_hex() {
+        assert!(parse_md5_hex("not-a-valid-md5").is_none());
+        assert!(parse_md5_hex("d41d8cd98f00b204e9800998ecf8427").is_none()); // too short
+        assert!(parse_md5_hex("").is_none());
+    }
+
+    #[test]
+    fn mip_data_returns_correct_slice() {
+        let mut data = dds_header(8, 8, b"DXT1", 2, 64);
+        // Level 0: 8x8 = 2x2 blocks = 4 blocks * 8 bytes = 32 bytes
+        // Level 1: 4x4 = 1 block * 8 bytes = 8 bytes
+        for _ in 0..40 {
+            data.push(0xFF);
+        }
+        let tex = parse_dds(&data).unwrap();
+        assert_eq!(tex.mip_data(0).unwrap().len(), 32);
+        assert_eq!(tex.mip_data(1).unwrap().len(), 8);
+        assert!(tex.mip_data(2).is_none());
     }
 
     #[test]
